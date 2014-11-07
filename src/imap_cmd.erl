@@ -31,13 +31,13 @@ prepare_command({command, select, Mailbox}) ->
 prepare_command({command, examine, Mailbox}) ->
   prepare_tagged_command("EXAMINE ~s", [Mailbox]);
 prepare_command({command, search, SearchKeys}) ->
-  prepare_tagged_command("SEARCH ~s", [imap_util:to_key(SearchKeys)]);
+  prepare_tagged_command("UID SEARCH ~s", [imap_util:to_key(SearchKeys)]);
 prepare_command({command, fetch, Args}) ->
-  prepare_tagged_command("FETCH ~s ~s", Args);
+  prepare_tagged_command("UID FETCH ~s ~s", Args);
 prepare_command({command, store, Args}) ->
-  prepare_tagged_command("store ~s ~s \\~s", Args);
+  prepare_tagged_command("UID STORE ~s ~s \\~s", Args);
 prepare_command({command, expunge, _}) ->
-    prepare_tagged_command("expunge", []);
+    prepare_tagged_command("EXPUNGE", []);
 prepare_command({command, noop, {}}) ->
   prepare_tagged_command("NOOP", []).
 
