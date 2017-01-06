@@ -5,12 +5,13 @@
 -behaviour(gen_fsm).
 
 %% api
--export([connect/2, connect_ssl/2, login/3, logout/1, noop/1, disconnect/1,
-         select/2, examine/2,
-         search/2,
-         fetch/3,
-         store/4,
-         expunge/1
+-export([connect/2, connect/3, connect_ssl/2, connect_ssl/3, login/3, login/4,
+         logout/1, logout/2, noop/1, noop/2, disconnect/1, disconnect/2,
+         select/2, select/3, examine/2, examine/3,
+         search/2, search/3,
+         fetch/3, fetch/4,
+         store/4, store/5,
+         expunge/1, expunge/2
         ]).
 
 %% callbacks
@@ -20,7 +21,10 @@
 %% state funs
 -export([server_greeting/2, server_greeting/3, not_authenticated/2,
          not_authenticated/3, authenticated/2, authenticated/3,
-         logout/2, logout/3]).
+         loggingout/2, loggingout/3]).
+
+-define(TIMEOUT, 5000).
+
 
 %%%--- TODO TODO TODO -------------------------------------------------------------------
 %%% Objetivos:
@@ -41,39 +45,75 @@
 connect(Host, Port) ->
   gen_fsm:start_link(?MODULE, {tcp, Host, Port}, []).
 
+connect(Host, Port, Timeout) ->
+  gen_fsm:start_link(?MODULE, {tcp, Host, Port}, [{timeout, Timeout}]).
+
 connect_ssl(Host, Port) ->
   gen_fsm:start_link(?MODULE, {ssl, Host, Port}, []).
 
+connect_ssl(Host, Port, Timeout) ->
+  gen_fsm:start_link(?MODULE, {ssl, Host, Port}, [{timeout, Timeout}]).
+
 login(Conn, User, Pass) ->
-  gen_fsm:sync_send_event(Conn, {command, login, {User, Pass}}).
+  login(Conn, User, Pass, ?TIMEOUT).
+
+login(Conn, User, Pass, Timeout) ->
+  gen_fsm:sync_send_event(Conn, {command, login, {User, Pass}}, Timeout).
 
 logout(Conn) ->
-  gen_fsm:sync_send_event(Conn, {command, logout, {}}).
+  logout(Conn, ?TIMEOUT).
+
+logout(Conn, Timeout) ->
+  gen_fsm:sync_send_event(Conn, {command, logout, {}}, Timeout).
 
 noop(Conn) ->
-  gen_fsm:sync_send_event(Conn, {command, noop, {}}).
+  noop(Conn, ?TIMEOUT).
+
+noop(Conn, Timeout) ->
+  gen_fsm:sync_send_event(Conn, {command, noop, {}}, Timeout).
 
 disconnect(Conn) ->
-  gen_fsm:sync_send_all_state_event(Conn, {command, disconnect, {}}).
+  disconnect(Conn, ?TIMEOUT).
+
+disconnect(Conn, Timeout) ->
+  gen_fsm:sync_send_all_state_event(Conn, {command, disconnect, {}}, Timeout).
 
 select(Conn, Mailbox) ->
-  gen_fsm:sync_send_event(Conn, {command, select, Mailbox}).
+  select(Conn, Mailbox, ?TIMEOUT).
+
+select(Conn, Mailbox, Timeout) ->
+  gen_fsm:sync_send_event(Conn, {command, select, Mailbox}, Timeout).
 
 examine(Conn, Mailbox) ->
-  gen_fsm:sync_send_event(Conn, {command, examine, Mailbox}).
+  examine(Conn, Mailbox, ?TIMEOUT).
+
+examine(Conn, Mailbox, Timeout) ->
+  gen_fsm:sync_send_event(Conn, {command, examine, Mailbox}, Timeout).
 
 search(Conn, SearchKeys) ->
-  gen_fsm:sync_send_event(Conn, {command, search, SearchKeys}).
+  search(Conn, SearchKeys, ?TIMEOUT).
+
+search(Conn, SearchKeys, Timeout) ->
+  gen_fsm:sync_send_event(Conn, {command, search, SearchKeys}, Timeout).
 
 fetch(Conn, SequenceSet, MsgDataItems) ->
-  gen_fsm:sync_send_event(Conn, {command, fetch, [SequenceSet, MsgDataItems]}).
+  fetch(Conn, SequenceSet, MsgDataItems, ?TIMEOUT).
+
+fetch(Conn, SequenceSet, MsgDataItems, Timeout) ->
+  gen_fsm:sync_send_event(Conn, {command, fetch, [SequenceSet, MsgDataItems]}, Timeout).
 
 store(Conn, SequenceSet, Flags, Action) ->
-  gen_fsm:sync_send_event(Conn, {command, store, [SequenceSet, Flags, Action]}).
+  store(Conn, SequenceSet, Flags, Action, ?TIMEOUT).
+
+store(Conn, SequenceSet, Flags, Action, Timeout) ->
+  gen_fsm:sync_send_event(Conn, {command, store, [SequenceSet, Flags, Action]}, Timeout).
 
 expunge(Conn) ->
-  gen_fsm:sync_send_event(Conn, {command, expunge, []}).
-  
+  expunge(Conn, ?TIMEOUT).
+
+expunge(Conn, Timeout) ->
+  gen_fsm:sync_send_event(Conn, {command, expunge, []}, Timeout).
+
 %%%-------------------
 %%% Callback functions
 %%%-------------------
@@ -123,11 +163,11 @@ authenticated(Command = {command, _, _}, From, StateData) ->
 authenticated(Response = {response, _, _, _}, StateData) ->
   handle_response(Response, authenticated, StateData).
 
-logout(Command = {command, _, _}, From, StateData) ->
-  handle_command(Command, From, logout, StateData).
+loggingout(Command = {command, _, _}, From, StateData) ->
+  handle_command(Command, From, loggingout, StateData).
 
-logout(Response = {response, _, _, _}, StateData) ->
-  handle_response(Response, logout, StateData).
+loggingout(Response = {response, _, _, _}, StateData) ->
+  handle_response(Response, loggingout, StateData).
 
 %% TODO: reconexion en caso de desconexion inesperada
 handle_info({SockTypeClosed, Sock}, StateName,
@@ -135,12 +175,12 @@ handle_info({SockTypeClosed, Sock}, StateName,
     SockTypeClosed == tcp_closed; SockTypeClosed == ssl_closed ->
   NewStateData = StateData#state_data{socket = closed},
   case StateName of
-    logout ->
+    loggingout ->
       ?LOG_INFO("IMAP connection closed", []),
-      {next_state, logout, NewStateData};
+      {next_state, loggingout, NewStateData};
     StateName ->
       ?LOG_ERROR(handle_info, "IMAP connection closed unexpectedly", []),
-      {next_state, logout, NewStateData}
+      {next_state, loggingout, NewStateData}
   end;
 handle_info({SockType, Sock, Line}, StateName,
             StateData = #state_data{socket = Sock}) when
@@ -225,5 +265,5 @@ handle_command(Command, From, StateName, StateData) ->
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
-  
+
 -endif.
