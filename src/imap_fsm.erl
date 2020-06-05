@@ -133,8 +133,8 @@ server_greeting(Command = {command, _, _}, From, StateData) ->
   ?LOG_DEBUG("command enqueued: ~p", [Command]),
   {next_state, server_greeting, NewStateData}.
 
-server_greeting(_Response={response, untagged, "OK", Capabilities}, StateData) ->
-  %%?LOG_DEBUG("greeting received: ~p", [Response]),
+server_greeting(_ResponseLine={{response, untagged, "OK", Capabilities}, _}, StateData) ->
+  %%?LOG_DEBUG("greeting received: ~p", [ResponseLine]),
   EnqueuedCommands = lists:reverse(StateData#state_data.enqueued_commands),
   NewStateData = StateData#state_data{server_capabilities = Capabilities,
                                       enqueued_commands = []},
@@ -142,8 +142,8 @@ server_greeting(_Response={response, untagged, "OK", Capabilities}, StateData) -
     gen_fsm:send_event(self(), {enqueued_command, Command, From})
   end, EnqueuedCommands),
   {next_state, not_authenticated, NewStateData};
-server_greeting(_Response = {response, _, _, _}, StateData) ->
-  %%?LOG_ERROR(server_greeting, "unrecognized greeting: ~p", [Response]),
+server_greeting(_ResponseLine = {{response, _, _, _}, _}, StateData) ->
+  %%?LOG_ERROR(server_greeting, "unrecognized greeting: ~p", [ResponseLine]),
   {stop, unrecognized_greeting, StateData}.
 
 %% TODO: hacer un comando `tag CAPABILITY' si tras hacer login no hemos
@@ -154,20 +154,20 @@ not_authenticated(Command = {command, _, _}, From, StateData) ->
 not_authenticated({enqueued_command, Command, From}, StateData) ->
   ?LOG_DEBUG("command dequeued: ~p", [Command]),
   handle_command(Command, From, not_authenticated, StateData);
-not_authenticated(Response = {response, _, _, _}, StateData) ->
-  handle_response(Response, not_authenticated, StateData).
+not_authenticated(ResponseLine = {{response, _, _, _}, _}, StateData) ->
+  handle_response(ResponseLine, not_authenticated, StateData).
 
 authenticated(Command = {command, _, _}, From, StateData) ->
   handle_command(Command, From, authenticated, StateData).
 
-authenticated(Response = {response, _, _, _}, StateData) ->
-  handle_response(Response, authenticated, StateData).
+authenticated(ResponseLine = {{response, _, _, _}, _}, StateData) ->
+  handle_response(ResponseLine, authenticated, StateData).
 
 loggingout(Command = {command, _, _}, From, StateData) ->
   handle_command(Command, From, loggingout, StateData).
 
-loggingout(Response = {response, _, _, _}, StateData) ->
-  handle_response(Response, loggingout, StateData).
+loggingout(ResponseLine = {{response, _, _, _}, _}, StateData) ->
+  handle_response(ResponseLine, loggingout, StateData).
 
 %% TODO: reconexion en caso de desconexion inesperada
 handle_info({SockTypeClosed, Sock}, StateName,
@@ -188,7 +188,7 @@ handle_info({SockType, Sock, Line}, StateName,
   ?LOG_DEBUG("line received: ~s", [imap_util:clean_line(Line)]),
   case imap_resp:parse_response(imap_util:clean_line(Line)) of
     {ok, Response} ->
-      ?MODULE:StateName(Response, StateData);
+      ?MODULE:StateName({Response, Line}, StateData);
     {error, nomatch} ->
       ?LOG_ERROR(handle_info, "unrecognized response: ~p",
                  [imap_util:clean_line(Line)]),
@@ -223,11 +223,11 @@ terminate(Reason, _StateName, _StateData) ->
 %%% Commands/Responses handling functions
 %%%--------------------------------------
 
-handle_response(Response = {response, untagged, _, _}, StateName, StateData) ->
+handle_response({Response = {response, untagged, _, _}, _}, StateName, StateData) ->
   NewStateData = StateData#state_data{untagged_responses_received =
     [Response | StateData#state_data.untagged_responses_received]},
   {next_state, StateName, NewStateData};
-handle_response(Response = {response, Tag, _, _}, StateName, StateData) ->
+handle_response({Response = {response, Tag, _, _}, Line}, StateName, StateData) ->
   ResponsesReceived =
     case StateData#state_data.untagged_responses_received of
       [] ->
@@ -235,16 +235,22 @@ handle_response(Response = {response, Tag, _, _}, StateName, StateData) ->
       UntaggedResponsesReceived ->
         lists:reverse([Response | UntaggedResponsesReceived])
     end,
-  {ok, {Command, From}, CommandsPendingResponse} =
-    imap_util:extract_dict_element(Tag,
-       StateData#state_data.commands_pending_response),
-  NewStateData = StateData#state_data{
-                   commands_pending_response = CommandsPendingResponse,
-                   untagged_responses_received = []
-                  },
-  NextStateName = imap_resp:analyze_response(StateName, ResponsesReceived,
-                                             Command, From),
-  {next_state, NextStateName, NewStateData}.
+  try
+      {ok, {Command, From}, CommandsPendingResponse} =
+        imap_util:extract_dict_element(Tag,
+           StateData#state_data.commands_pending_response),
+      NewStateData = StateData#state_data{
+                       commands_pending_response = CommandsPendingResponse,
+                       untagged_responses_received = []
+                      },
+      NextStateName = imap_resp:analyze_response(StateName, ResponsesReceived,
+                                                 Command, From),
+      {next_state, NextStateName, NewStateData}
+  catch
+    error:{badmatch, error} ->
+       ?LOG_DEBUG("Tag not found, assumming the line is untagged", []),
+       handle_response({{response, untagged, Line, []}, Line}, StateName, StateData)
+  end.
 
 handle_command(Command, From, StateName, StateData) ->
   case imap_cmd:send_command(StateData#state_data.socket_type,
