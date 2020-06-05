@@ -236,9 +236,10 @@ handle_response({Response = {response, Tag, _, _}, Line}, StateName, StateData) 
         lists:reverse([Response | UntaggedResponsesReceived])
     end,
   try
-      {ok, {Command, From}, CommandsPendingResponse} =
-        imap_util:extract_dict_element(Tag,
-           StateData#state_data.commands_pending_response),
+      imap_util:extract_dict_element(Tag,
+           StateData#state_data.commands_pending_response)
+  of
+    {ok, {Command, From}, CommandsPendingResponse} ->
       NewStateData = StateData#state_data{
                        commands_pending_response = CommandsPendingResponse,
                        untagged_responses_received = []
